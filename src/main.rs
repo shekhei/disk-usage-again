@@ -1,0 +1,253 @@
+#![feature(no_panic_pow)]
+
+#[macro_use]
+extern crate nom;
+extern crate rayon;
+#[macro_use]
+extern crate clap;
+
+use nom::is_digit;
+use nom::types::CompleteByteSlice;
+use rayon::prelude::*;
+use std::fs::DirEntry;
+use std::io;
+use std::os::unix::fs::MetadataExt;
+use std::path::Path;
+use std::sync::Arc;
+
+use clap::{Arg, ArgMatches};
+
+fn calculate_size(config: Arc<Config>, depth: u64, dir: &Path, terminating_char: char) -> u128 {
+    let metadata = if config.follow_symlink {
+        dir.metadata()
+    } else {
+        dir.symlink_metadata()
+    };
+    match metadata {
+        Ok(ref metadata) => {
+            let file_size = match config.apparent_size {
+                false => metadata.blocks() as u128 * 512, // as stated, each block is in 512 for unix and linux
+                true => metadata.size() as u128
+            };
+            if metadata.is_file() {
+                if config.display_files && depth <= config.max_depth {
+                    print!(
+                        "{}\t{}{}",
+                        (config.size_converter)(file_size as u128),
+                        dir.to_str().unwrap(),
+                        terminating_char
+                    );
+                }
+                file_size
+            } else if metadata.is_dir() {
+                let size: u128 = dir
+                    .read_dir()
+                    .unwrap()
+                    .collect::<Vec<_>>()
+                    .into_par_iter()
+                    .map_with(config.clone(), |config, e: io::Result<DirEntry>| {
+                        calculate_size(config.clone(), depth + 1, &(e.unwrap().path()), terminating_char)
+                    })
+                    .sum::<u128>() + file_size;
+                if depth <= config.max_depth {
+                    print!(
+                        "{}\t{}{}",
+                        (config.size_converter)(size),
+                        dir.to_str().unwrap(),
+                        terminating_char
+                    );
+                }
+                size
+            } else {
+                0
+            }
+        },
+        Err(e) => {
+            println!("{:?} at {}", e, dir.to_str().unwrap());
+            0
+        }
+    }
+}
+
+struct Config {
+    display_files: bool,
+    max_depth: u64,
+    follow_symlink: bool,
+    apparent_size: bool,
+    size_converter: Box<dyn Fn(u128) -> String + Sync + Send>,
+}
+
+fn unsigned_numeric(v: String) -> Result<(), String> {
+    if let Err(_) = v.parse::<u64>() {
+        Err(String::from("Value has to be a number and >= 0"))
+    } else {
+        Ok(())
+    }
+}
+
+fn k_size_display(size: u128) -> String {
+    // defaults to using 512 block
+    const BLOCK_SIZE : u128 = 1024;
+    let mut k = size / BLOCK_SIZE;
+    k += if size - k * BLOCK_SIZE > 0 { 1 } else { 0 };
+    k.to_string()
+}
+
+#[derive(PartialEq, Eq, Debug)]
+struct BlockSize(u64, usize, usize); // block_size_multiplier, block_size_power, block_size
+
+fn size_display_builder(block_size: BlockSize) -> impl Fn(u128) -> String {
+    let BlockSize(multiplier, power, block_size) = block_size;
+    let multiplier : u128 = multiplier as u128;
+    let block_size = block_size as u128;
+    let block_size = block_size.checked_pow(power as u32).unwrap().checked_mul(multiplier).unwrap();
+    // if it cannot unwrap, lets let it die
+    move |size: u128| -> String {
+        // defaults to using 512 block
+        let mut k = size / block_size;
+        k += match size % block_size {
+            0 => 0,
+            _ => 1
+        };
+        // k += if size - k * block_size > 0 { 1 } else { 0 };
+        k.to_string()
+    }
+}
+
+fn g_size_display(size: u128) -> String {
+    // defaults to using 512 block
+    const BLOCK_SIZE : u128 = 1073741824;
+    let mut g = size / BLOCK_SIZE;
+    g += if size - g * BLOCK_SIZE > 0 { 1 } else { 0 };
+    g.to_string()
+}
+
+fn m_size_display(size: u128) -> String {
+    // defaults to using 512 block
+    const BLOCK_SIZE : u128 = 1048576;
+    let mut g = size / BLOCK_SIZE;
+    g += if size - g * BLOCK_SIZE > 0 { 1 } else { 0 };
+    g.to_string()
+}
+
+
+
+named!(block_size_parser<CompleteByteSlice, (Option<CompleteByteSlice>, Option<char>, Option<char>)>,
+    do_parse!(
+        numeric: opt!(complete!(take_while1!( is_digit ))) >>
+        unit:  opt!( complete!(one_of!("KMGTPEZY")) ) >>
+        unit2: opt!( complete!(one_of!("B")) ) >>
+        ((numeric, unit, unit2))
+    )
+);
+
+fn block_size(input: &[u8]) -> BlockSize {
+    let result = block_size_parser(CompleteByteSlice(input)).unwrap().1;
+    BlockSize(
+        result.0.map_or(1u64, |u| std::str::from_utf8(*u).unwrap().parse::<u64>().unwrap() ),
+        match result.1 {
+            Some('K')=> 1,
+            Some('M')=> 2,
+            Some('G')=> 3,
+            Some('T')=> 4,
+            Some('P')=> 5,
+            Some('E')=> 6,
+            Some('Z')=> 7,
+            Some('Y')=> 8,
+            None=> 0,
+            _=> unreachable!()
+        },
+        match result.2 {
+            Some('B') => 1000,
+            None => 1024,
+            _ => unreachable!()
+        }
+    )
+}
+
+
+#[cfg(test)]
+mod tests {
+    use nom::is_digit;
+    use super::*;
+
+
+    #[test]
+    fn test_block_size_reader() {
+        assert_eq!(block_size("123KB".as_bytes()), BlockSize(123, 1, 1000));
+        assert_eq!(block_size("KB".as_bytes()), BlockSize(1, 1, 1000));
+        assert_eq!(block_size("".as_bytes()), BlockSize(1, 1, 1024));
+        assert_eq!(block_size("1".as_bytes()), BlockSize(1, 1, 1024));
+        assert_eq!(block_size("M".as_bytes()), BlockSize(1, 2, 1024));
+    }
+}
+
+fn main() {
+    let matches: ArgMatches = clap_app!(("disk usage again") =>
+        (version: "0.1")
+        (author: "Wong Shek Hei <shekhei@gmail.com")
+        (about: "disk usage statistics")
+        (@arg all: -a --all "display an entry for each file in the file hierachy")
+        (@arg block_size: -B --("block-size") +takes_value value_name[SIZE] "use SIZE-byte blocks")
+        (@arg apparent_size: --("apparent-size") "print apparent sizes,  rather  than  disk	 usage;	 although  the
+	      apparent	size is	usually	smaller, it may	be larger due to holes
+	      in (`sparse') files, internal  fragmentation,  indirect  blocks,
+	      and the like")
+        (@arg depth: -d +takes_value {unsigned_numeric} "depth" )
+        (@arg k: -k conflicts_with[g m] "like --block-size=1K" )
+        (@arg g: -g conflicts_with[k m] "like --block-size=1G" )
+        (@arg m: -m conflicts_with[k g] "like --block-size=1M" )
+        (@arg follow_symlink: -L "Symbolic links on the command line and in file hierarchies are
+             followed.")
+        (@arg ("grand_total"): -c "display a grand total")
+        (@arg PATHS: +required ... "paths")
+    ).arg(
+        Arg::with_name("end_null")
+            .short("0")
+            .long("null")
+            .help("end each output line with NUL, not newline")
+    ).get_matches();
+
+    let mut config = Config {
+        display_files: false,
+        max_depth: u64::max_value(),
+        follow_symlink: matches.is_present("follow_symlink"),
+        apparent_size: matches.is_present("apparent_size"),
+        size_converter: Box::new(|u: u128| k_size_display(u)),
+    };
+    let mut terminating_char = '\n';
+    if matches.is_present("end_null") {
+        terminating_char = '\0';
+    }
+    if matches.is_present("all") {
+        config.display_files = true
+    }
+    if matches.is_present("depth") {
+        config.max_depth = matches.value_of("depth").unwrap().parse().unwrap();
+    }
+
+    if matches.is_present("block_size") {
+        let size_display = size_display_builder(block_size(matches.value_of("block_size").unwrap().as_bytes()));
+        config.size_converter = Box::new(move |size: u128| size_display(size));
+    } else if matches.is_present("k") {
+        config.size_converter = Box::new(|size: u128| k_size_display(size));
+    } else if matches.is_present("g") {
+        config.size_converter = Box::new(|size: u128| g_size_display(size));
+    } else if matches.is_present("m") {
+        config.size_converter = Box::new(|size: u128| m_size_display(size));
+    }
+    let config = Arc::new(config);
+    let total_size: u128 = matches
+        .values_of("PATHS")
+        .unwrap()
+        .map(|s| Path::new(s))
+        .collect::<Vec<_>>()
+        .into_par_iter()
+        .map_with(config.clone(), |config, p| {
+            calculate_size(config.clone(), 0, p, terminating_char)
+        })
+        .sum();
+    if matches.is_present("grand_total") {
+        println!("{}\ttotal", (config.size_converter)(total_size));
+    }
+}
