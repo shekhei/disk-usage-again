@@ -48,11 +48,12 @@ impl ShardedSet {
     }
 }
 
-fn calculate_size(config: Arc<Config>, depth: u64, dir: &Path, terminating_char: char, record: Arc<ShardedSet>) -> OutputSize {
+fn calculate_size(config: Arc<Config>, depth: u64, dir: &DirEntry, terminating_char: char, record: Arc<ShardedSet>) -> OutputSize {
+    let path = dir.path();
     let metadata = if config.follow_symlink {
-        dir.metadata()
+        path.metadata()
     } else {
-        dir.symlink_metadata()
+        dir.metadata()
     };
     match metadata {
         Ok(ref metadata) => {
@@ -61,7 +62,7 @@ fn calculate_size(config: Arc<Config>, depth: u64, dir: &Path, terminating_char:
             } else {
                 let file_size = (config.size_reader)(metadata);
                 if metadata.is_dir() {
-                    let size: OutputSize = dir
+                    let size: OutputSize = dir.path()
                         .read_dir()
                         .unwrap()
                         .collect::<Vec<_>>()
@@ -69,7 +70,7 @@ fn calculate_size(config: Arc<Config>, depth: u64, dir: &Path, terminating_char:
                         .map_with(config.clone(), |config, e: &[io::Result<DirEntry>]| {
                             e.into_iter().map(|e| {
                                 match &e {
-                                    Ok(p) => calculate_size(config.clone(), depth + 1, &p.path(), terminating_char, record.clone()),
+                                    Ok(ref p) => calculate_size(config.clone(), depth + 1, p, terminating_char, record.clone()),
                                     _ => unimplemented!()
                                 }
                                 
@@ -80,7 +81,7 @@ fn calculate_size(config: Arc<Config>, depth: u64, dir: &Path, terminating_char:
                         print!(
                             "{}\t{}{}",
                             (config.size_converter)(size),
-                            dir.to_str().unwrap(),
+                            path.to_str().unwrap(),
                             terminating_char
                         );
                     }
@@ -90,7 +91,7 @@ fn calculate_size(config: Arc<Config>, depth: u64, dir: &Path, terminating_char:
                         print!(
                             "{}\t{}{}",
                             (config.size_converter)(file_size as OutputSize),
-                            dir.to_str().unwrap(),
+                            path.to_str().unwrap(),
                             terminating_char
                         );
                     }
@@ -99,7 +100,7 @@ fn calculate_size(config: Arc<Config>, depth: u64, dir: &Path, terminating_char:
             }
         },
         Err(e) => {
-            println!("{:?} at {}", e, dir.to_str().unwrap());
+            println!("{:?} at {}", e, path.to_str().unwrap());
             0
         }
     }
@@ -318,16 +319,67 @@ fn main() {
     }
     let config = Arc::new(config);
     let record = Arc::new(ShardedSet::new());
-    let total_size: OutputSize = matches
+    let (dirs, files) = matches
         .values_of("PATHS")
         .unwrap()
         .map(|s| Path::new(s))
-        .collect::<Vec<_>>()
-        .into_par_iter()
-        .map_with(config.clone(), |config, p| {
-            calculate_size(config.clone(), 0, p, terminating_char, record.clone())
+        .partition::<Vec<_>, _>(|p| p.is_dir());
+    let total_size = files.into_iter()
+        .map(|path| {
+            let metadata = if config.follow_symlink {
+                path.metadata().unwrap()
+            } else {
+                path.symlink_metadata().unwrap()
+            };
+            if should_skip(&metadata, &record) {
+                0
+            } else {
+                let file_size = (config.size_reader)(&metadata);
+                if config.display_files && config.max_depth > 0 {
+                    print!(
+                        "{}\t{}{}",
+                        (config.size_converter)(file_size as OutputSize),
+                        path.to_str().unwrap(),
+                        terminating_char
+                    );
+                }
+                file_size
+            }
+        }).sum::<OutputSize>();
+    let total_size = dirs.into_par_iter()
+        .map_with(config.clone(), |config, path| {
+            let metadata = if config.follow_symlink {
+                path.metadata().unwrap()
+            } else {
+                path.symlink_metadata().unwrap()
+            };
+            let file_size = (config.size_reader)(&metadata);
+            let size: OutputSize = path
+                .read_dir()
+                .unwrap()
+                .collect::<Vec<_>>()
+                .par_chunks(8)
+                .map_with(config.clone(), |config, e: &[io::Result<DirEntry>]| {
+                    e.into_iter().map(|e| {
+                        match &e {
+                            Ok(ref p) => calculate_size(config.clone(), 1, p, terminating_char, record.clone()),
+                            _ => unimplemented!()
+                        }
+                        
+                    }).sum::<OutputSize>()
+                })
+                .sum::<OutputSize>() + file_size;
+                if config.max_depth > 0 {
+                    print!(
+                        "{}\t{}{}",
+                        (config.size_converter)(size),
+                        path.to_str().unwrap(),
+                        terminating_char
+                    );
+                }
+                size
         })
-        .sum();
+        .sum::<OutputSize>() + total_size;
     if matches.is_present("grand_total") {
         println!("{}\ttotal", (config.size_converter)(total_size));
     }
