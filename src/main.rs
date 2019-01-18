@@ -13,7 +13,6 @@ use rayon::prelude::*;
 use std::fs::DirEntry;
 use std::fs::Metadata;
 use std::io;
-use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -24,18 +23,27 @@ use clap::{Arg, ArgMatches};
 type OutputSize = u128;
 
 struct ShardedSet {
-    _internal: Mutex<HashSet<u64>>
+    _internal: [Mutex<HashSet<u64>>; 8]
 }
 
 // unsafe impl Sync for ShardedMap {}
 impl ShardedSet {
     fn insert(&self, val: u64) -> bool {
-        self._internal.lock().unwrap().insert(val)
+        self._internal[(val%8) as usize].lock().unwrap().insert(val)
     }
 
     fn new() -> ShardedSet {
         ShardedSet {
-            _internal: Mutex::new(HashSet::new())
+            _internal: [
+		Mutex::new(HashSet::new()),
+		Mutex::new(HashSet::new()),
+		Mutex::new(HashSet::new()),
+		Mutex::new(HashSet::new()),
+		Mutex::new(HashSet::new()),
+		Mutex::new(HashSet::new()),
+		Mutex::new(HashSet::new()),
+		Mutex::new(HashSet::new())
+	    ]
         }
     }
 }
@@ -211,17 +219,43 @@ mod tests {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn should_skip(metadata: &Metadata, record: &ShardedSet) -> bool {
+    use std::os::unix::fs::MetadataExt;
     !record.insert(metadata.ino())
 }
 
+#[cfg(target_os = "linux")]
+fn should_skip(metadata: &Metadata, record: &ShardedSet) -> bool {
+    use std::os::linux::fs::MetadataExt;
+    !record.insert(metadata.st_ino())
+}
+
+
+#[cfg(target_os = "macos")]
 fn size_block_reader(metadata: &Metadata) -> OutputSize {
+    use std::os::unix::fs::MetadataExt;
     metadata.blocks() as OutputSize * 512
 }
 
+#[cfg(target_os = "macos")]
 fn apparent_size_reader(metadata: &Metadata) -> OutputSize {
+    use std::os::unix::fs::MetadataExt;
     metadata.size() as OutputSize
 }
+
+#[cfg(target_os = "linux")]
+fn size_block_reader(metadata: &Metadata) -> OutputSize {
+    use std::os::linux::fs::MetadataExt;
+    metadata.st_blocks() as OutputSize * 512
+}
+
+#[cfg(target_os = "linux")]
+fn apparent_size_reader(metadata: &Metadata) -> OutputSize {
+    use std::os::linux::fs::MetadataExt;
+    metadata.st_size() as OutputSize
+}
+
 
 fn main() {
     let matches: ArgMatches = clap_app!(("disk usage again") =>
