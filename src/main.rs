@@ -48,7 +48,7 @@ impl ShardedSet {
     }
 }
 
-fn calculate_size(config: Arc<Config>, depth: u64, dir: &DirEntry, terminating_char: char, record: Arc<ShardedSet>) -> OutputSize {
+fn calculate_size(config: &Config, depth: u64, dir: &DirEntry, terminating_char: char, record: &ShardedSet) -> OutputSize {
     let path = dir.path();
     let metadata = if config.follow_symlink {
         path.metadata()
@@ -317,23 +317,24 @@ fn main() {
     } else if matches.is_present("m") {
         config.size_converter = Box::new(|size: OutputSize| m_size_display(size));
     }
-    let config = Arc::new(config);
     let record = Arc::new(ShardedSet::new());
     let (dirs, files) = matches
         .values_of("PATHS")
         .unwrap()
-        .map(|s| Path::new(s))
-        .partition::<Vec<_>, _>(|p| p.is_dir());
+        .map(|s| {
+            let p = Path::new(s);
+            let m = match config.follow_symlink {
+                true => p.metadata(),
+                _ => p.symlink_metadata()
+            }.unwrap();
+            (p, m)
+        })
+        .partition::<Vec<_>, _>(|(_, m)| m.is_dir());
+
     let total_size = files.into_iter()
-        .map(|path| {
-            let metadata = if config.follow_symlink {
-                path.metadata().unwrap()
-            } else {
-                path.symlink_metadata().unwrap()
-            };
-            if should_skip(&metadata, &record) {
-                0
-            } else {
+        .map(|(path, metadata)| match should_skip(&metadata, &record) {
+            true => 0,
+            _ => {
                 let file_size = (config.size_reader)(&metadata);
                 if config.display_files && config.max_depth > 0 {
                     print!(
@@ -347,22 +348,17 @@ fn main() {
             }
         }).sum::<OutputSize>();
     let total_size = dirs.into_par_iter()
-        .map_with(config.clone(), |config, path| {
-            let metadata = if config.follow_symlink {
-                path.metadata().unwrap()
-            } else {
-                path.symlink_metadata().unwrap()
-            };
+        .map_with(&config, |config, (path, metadata)| {
             let file_size = (config.size_reader)(&metadata);
             let size: OutputSize = path
                 .read_dir()
                 .unwrap()
                 .collect::<Vec<_>>()
                 .par_chunks(8)
-                .map_with(config.clone(), |config, e: &[io::Result<DirEntry>]| {
+                .map_with(&config, |config, e: &[io::Result<DirEntry>]| {
                     e.into_iter().map(|e| {
                         match &e {
-                            Ok(ref p) => calculate_size(config.clone(), 1, p, terminating_char, record.clone()),
+                            Ok(ref p) => calculate_size(config, 1, p, terminating_char, &record),
                             _ => unimplemented!()
                         }
                         
