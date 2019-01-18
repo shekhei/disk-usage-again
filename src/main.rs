@@ -16,12 +16,31 @@ use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::collections::HashSet;
 
 use clap::{Arg, ArgMatches};
 
 type OutputSize = u128;
 
-fn calculate_size(config: Arc<Config>, depth: u64, dir: &Path, terminating_char: char) -> OutputSize {
+struct ShardedSet {
+    _internal: Mutex<HashSet<u64>>
+}
+
+// unsafe impl Sync for ShardedMap {}
+impl ShardedSet {
+    fn insert(&self, val: u64) -> bool {
+        self._internal.lock().unwrap().insert(val)
+    }
+
+    fn new() -> ShardedSet {
+        ShardedSet {
+            _internal: Mutex::new(HashSet::new())
+        }
+    }
+}
+
+fn calculate_size(config: Arc<Config>, depth: u64, dir: &Path, terminating_char: char, record: Arc<ShardedSet>) -> OutputSize {
     let metadata = if config.follow_symlink {
         dir.metadata()
     } else {
@@ -29,44 +48,46 @@ fn calculate_size(config: Arc<Config>, depth: u64, dir: &Path, terminating_char:
     };
     match metadata {
         Ok(ref metadata) => {
-            let file_size = (config.size_reader)(metadata);
-            if metadata.is_file() {
-                if config.display_files && depth <= config.max_depth {
-                    print!(
-                        "{}\t{}{}",
-                        (config.size_converter)(file_size as OutputSize),
-                        dir.to_str().unwrap(),
-                        terminating_char
-                    );
-                }
-                file_size
-            } else if metadata.is_dir() {
-                let size: OutputSize = dir
-                    .read_dir()
-                    .unwrap()
-                    .collect::<Vec<_>>()
-                    .par_chunks(8)
-                    .map_with(config.clone(), |config, e: &[io::Result<DirEntry>]| {
-                        e.into_iter().map(|e| {
-                            match &e {
-                                Ok(p) => calculate_size(config.clone(), depth + 1, &p.path(), terminating_char),
-                                _ => unimplemented!()
-                            }
-                            
-                        }).sum::<OutputSize>()
-                    })
-                    .sum::<OutputSize>() + file_size;
-                if depth <= config.max_depth {
-                    print!(
-                        "{}\t{}{}",
-                        (config.size_converter)(size),
-                        dir.to_str().unwrap(),
-                        terminating_char
-                    );
-                }
-                size
-            } else {
+            if should_skip(&metadata, &record) {
                 0
+            } else {
+                let file_size = (config.size_reader)(metadata);
+                if metadata.is_dir() {
+                    let size: OutputSize = dir
+                        .read_dir()
+                        .unwrap()
+                        .collect::<Vec<_>>()
+                        .par_chunks(8)
+                        .map_with(config.clone(), |config, e: &[io::Result<DirEntry>]| {
+                            e.into_iter().map(|e| {
+                                match &e {
+                                    Ok(p) => calculate_size(config.clone(), depth + 1, &p.path(), terminating_char, record.clone()),
+                                    _ => unimplemented!()
+                                }
+                                
+                            }).sum::<OutputSize>()
+                        })
+                        .sum::<OutputSize>() + file_size;
+                    if depth <= config.max_depth {
+                        print!(
+                            "{}\t{}{}",
+                            (config.size_converter)(size),
+                            dir.to_str().unwrap(),
+                            terminating_char
+                        );
+                    }
+                    size
+                } else {
+                    if config.display_files && depth <= config.max_depth {
+                        print!(
+                            "{}\t{}{}",
+                            (config.size_converter)(file_size as OutputSize),
+                            dir.to_str().unwrap(),
+                            terminating_char
+                        );
+                    }
+                    file_size
+                }
             }
         },
         Err(e) => {
@@ -190,6 +211,10 @@ mod tests {
     }
 }
 
+fn should_skip(metadata: &Metadata, record: &ShardedSet) -> bool {
+    !record.insert(metadata.ino())
+}
+
 fn size_block_reader(metadata: &Metadata) -> OutputSize {
     metadata.blocks() as OutputSize * 512
 }
@@ -199,7 +224,6 @@ fn apparent_size_reader(metadata: &Metadata) -> OutputSize {
 }
 
 fn main() {
-    println!("Num of cpus: {}", num_cpus::get());
     let matches: ArgMatches = clap_app!(("disk usage again") =>
         (version: "0.1")
         (author: "Wong Shek Hei <shekhei@gmail.com")
@@ -231,9 +255,9 @@ fn main() {
         follow_symlink: matches.is_present("follow_symlink"),
         apparent_size: matches.is_present("apparent_size"),
         size_reader: if matches.is_present("apparent_size") {
-            Box::new(size_block_reader)
-        } else {
             Box::new(apparent_size_reader)
+        } else {
+            Box::new(size_block_reader)
         },
         size_converter: Box::new(|u: OutputSize| k_size_display(u)),
     };
@@ -259,6 +283,7 @@ fn main() {
         config.size_converter = Box::new(|size: OutputSize| m_size_display(size));
     }
     let config = Arc::new(config);
+    let record = Arc::new(ShardedSet::new());
     let total_size: OutputSize = matches
         .values_of("PATHS")
         .unwrap()
@@ -266,7 +291,7 @@ fn main() {
         .collect::<Vec<_>>()
         .into_par_iter()
         .map_with(config.clone(), |config, p| {
-            calculate_size(config.clone(), 0, p, terminating_char)
+            calculate_size(config.clone(), 0, p, terminating_char, record.clone())
         })
         .sum();
     if matches.is_present("grand_total") {

@@ -10,3 +10,6 @@ clap = "2.32.0"
 log = "0.4.6"
 nom = "^4.1"
 num_cpus = "1.9.0"
+
+[profile.release]
+debug = true
