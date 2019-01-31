@@ -1,4 +1,6 @@
 #![feature(no_panic_pow)]
+#![feature(trait_alias)]
+#![feature(unboxed_closures, fn_traits)]
 
 #[macro_use]
 extern crate nom;
@@ -14,7 +16,6 @@ use std::fs::DirEntry;
 use std::fs::Metadata;
 use std::io;
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::Mutex;
 use std::collections::HashSet;
 
@@ -48,7 +49,11 @@ impl ShardedSet {
     }
 }
 
-fn calculate_size(config: Arc<Config>, depth: u64, dir: &Path, terminating_char: char, record: Arc<ShardedSet>) -> OutputSize {
+fn calculate_size<SizeReader>(
+    config: &Config<SizeReader>, depth: u64, dir: &Path, terminating_char: char, record: &ShardedSet
+) -> OutputSize
+    where 
+        SizeReader: Fn(&Metadata) -> OutputSize + Sync + Send{
     let metadata = if config.follow_symlink {
         dir.metadata()
     } else {
@@ -66,10 +71,10 @@ fn calculate_size(config: Arc<Config>, depth: u64, dir: &Path, terminating_char:
                         .unwrap()
                         .collect::<Vec<_>>()
                         .par_chunks(8)
-                        .map_with(config.clone(), |config, e: &[io::Result<DirEntry>]| {
+                        .map(|e: &[io::Result<DirEntry>]| {
                             e.into_iter().map(|e| {
                                 match &e {
-                                    Ok(p) => calculate_size(config.clone(), depth + 1, &p.path(), terminating_char, record.clone()),
+                                    Ok(p) => calculate_size(config, depth + 1, &p.path(), terminating_char, record.clone()),
                                     _ => unimplemented!()
                                 }
                                 
@@ -79,7 +84,7 @@ fn calculate_size(config: Arc<Config>, depth: u64, dir: &Path, terminating_char:
                     if depth <= config.max_depth {
                         print!(
                             "{}\t{}{}",
-                            (config.size_converter)(size),
+                            config.convert_size(size),
                             dir.to_str().unwrap(),
                             terminating_char
                         );
@@ -89,7 +94,7 @@ fn calculate_size(config: Arc<Config>, depth: u64, dir: &Path, terminating_char:
                     if config.display_files && depth <= config.max_depth {
                         print!(
                             "{}\t{}{}",
-                            (config.size_converter)(file_size as OutputSize),
+                            config.convert_size(file_size as OutputSize),
                             dir.to_str().unwrap(),
                             terminating_char
                         );
@@ -105,13 +110,32 @@ fn calculate_size(config: Arc<Config>, depth: u64, dir: &Path, terminating_char:
     }
 }
 
-struct Config {
+trait SizeConverterType = Fn(OutputSize) -> String + Sync + Send;
+
+struct Config<SizeReader>
+    where 
+        SizeReader: Fn(&Metadata) -> OutputSize + Sync + Send
+{
     display_files: bool,
     max_depth: u64,
     follow_symlink: bool,
-    apparent_size: bool,
-    size_reader: Box<dyn Fn(&Metadata) -> OutputSize + Sync + Send>,
-    size_converter: Box<dyn Fn(OutputSize) -> String + Sync + Send>,
+    block_size: OutputSize,
+    size_reader: SizeReader
+}
+
+impl<SizeReader> Config<SizeReader> 
+    where 
+        SizeReader: Fn(&Metadata) -> OutputSize + Sync + Send
+{
+    fn convert_size(&self, size: OutputSize) -> String {
+        let mut k = size / self.block_size;
+        k += match size % self.block_size {
+            0 => 0,
+            _ => 1
+        };
+        // k += if size - k * block_size > 0 { 1 } else { 0 };
+        k.to_string()
+    }
 }
 
 fn unsigned_numeric(v: String) -> Result<(), String> {
@@ -122,52 +146,15 @@ fn unsigned_numeric(v: String) -> Result<(), String> {
     }
 }
 
-fn k_size_display(size: OutputSize) -> String {
-    // defaults to using 512 block
-    const BLOCK_SIZE : OutputSize = 1024;
-    let mut k = size / BLOCK_SIZE;
-    k += if size - k * BLOCK_SIZE > 0 { 1 } else { 0 };
-    k.to_string()
-}
-
 #[derive(PartialEq, Eq, Debug)]
 struct BlockSize(u64, usize, usize); // block_size_multiplier, block_size_power, block_size
 
-fn size_display_builder(block_size: BlockSize) -> impl Fn(OutputSize) -> String {
+fn block_size_builder(block_size: BlockSize) -> OutputSize {
     let BlockSize(multiplier, power, block_size) = block_size;
     let multiplier : OutputSize = multiplier as OutputSize;
     let block_size = block_size as OutputSize;
-    let block_size = block_size.checked_pow(power as u32).unwrap().checked_mul(multiplier).unwrap();
-    // if it cannot unwrap, lets let it die
-    move |size: OutputSize| -> String {
-        // defaults to using 512 block
-        let mut k = size / block_size;
-        k += match size % block_size {
-            0 => 0,
-            _ => 1
-        };
-        // k += if size - k * block_size > 0 { 1 } else { 0 };
-        k.to_string()
-    }
+    block_size.checked_pow(power as u32).unwrap().checked_mul(multiplier).unwrap()
 }
-
-fn g_size_display(size: OutputSize) -> String {
-    // defaults to using 512 block
-    const BLOCK_SIZE : OutputSize = 1073741824;
-    let mut g = size / BLOCK_SIZE;
-    g += if size - g * BLOCK_SIZE > 0 { 1 } else { 0 };
-    g.to_string()
-}
-
-fn m_size_display(size: OutputSize) -> String {
-    // defaults to using 512 block
-    const BLOCK_SIZE : OutputSize = 1048576;
-    let mut g = size / BLOCK_SIZE;
-    g += if size - g * BLOCK_SIZE > 0 { 1 } else { 0 };
-    g.to_string()
-}
-
-
 
 named!(block_size_parser<CompleteByteSlice, (Option<CompleteByteSlice>, Option<char>, Option<char>)>,
     do_parse!(
@@ -205,7 +192,6 @@ fn block_size(input: &[u8]) -> BlockSize {
 
 #[cfg(test)]
 mod tests {
-    use nom::is_digit;
     use super::*;
 
 
@@ -283,17 +269,24 @@ fn main() {
             .help("end each output line with NUL, not newline")
     ).get_matches();
 
-    let mut config = Config {
+    let mut config = Config::<_> {
         display_files: false,
         max_depth: u64::max_value(),
         follow_symlink: matches.is_present("follow_symlink"),
-        apparent_size: matches.is_present("apparent_size"),
-        size_reader: if matches.is_present("apparent_size") {
-            Box::new(apparent_size_reader)
+        block_size: if matches.is_present("block_size") {
+            block_size_builder(block_size(matches.value_of("block_size").unwrap().as_bytes()))
+        } else if matches.is_present("g") {
+            1073741824
+        } else if matches.is_present("m") {
+            1048576
         } else {
-            Box::new(size_block_reader)
+            1024
         },
-        size_converter: Box::new(|u: OutputSize| k_size_display(u)),
+        size_reader: if matches.is_present("apparent_size") {
+            apparent_size_reader
+        } else {
+            size_block_reader
+        }
     };
     let mut terminating_char = '\n';
     if matches.is_present("end_null") {
@@ -305,30 +298,18 @@ fn main() {
     if matches.is_present("depth") {
         config.max_depth = matches.value_of("depth").unwrap().parse().unwrap();
     }
-
-    if matches.is_present("block_size") {
-        let size_display = size_display_builder(block_size(matches.value_of("block_size").unwrap().as_bytes()));
-        config.size_converter = Box::new(move |size: OutputSize| size_display(size));
-    } else if matches.is_present("k") {
-        config.size_converter = Box::new(|size: OutputSize| k_size_display(size));
-    } else if matches.is_present("g") {
-        config.size_converter = Box::new(|size: OutputSize| g_size_display(size));
-    } else if matches.is_present("m") {
-        config.size_converter = Box::new(|size: OutputSize| m_size_display(size));
-    }
-    let config = Arc::new(config);
-    let record = Arc::new(ShardedSet::new());
+    let record = ShardedSet::new();
     let total_size: OutputSize = matches
         .values_of("PATHS")
         .unwrap()
         .map(|s| Path::new(s))
         .collect::<Vec<_>>()
         .into_par_iter()
-        .map_with(config.clone(), |config, p| {
-            calculate_size(config.clone(), 0, p, terminating_char, record.clone())
+        .map(|p| {
+            calculate_size(&config, 0, p, terminating_char, &record)
         })
         .sum();
     if matches.is_present("grand_total") {
-        println!("{}\ttotal", (config.size_converter)(total_size));
+        println!("{}\ttotal", config.convert_size(total_size));
     }
 }
