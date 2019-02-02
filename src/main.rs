@@ -50,14 +50,15 @@ impl ShardedSet {
 }
 
 fn calculate_size<SizeReader>(
-    config: &Config<SizeReader>, depth: u64, dir: &Path, terminating_char: char, record: &ShardedSet
+    config: &Config<SizeReader>, depth: u64, dir_entry: &DirEntry, terminating_char: char, record: &ShardedSet
 ) -> OutputSize
     where 
-        SizeReader: Fn(&Metadata) -> OutputSize + Sync + Send{
+        SizeReader: Fn(&Metadata) -> OutputSize + Sync + Send {
+    // let dir = dir_entry.path();
     let metadata = if config.follow_symlink {
-        dir.metadata()
+        dir_entry.path().metadata()
     } else {
-        dir.symlink_metadata()
+        dir_entry.metadata()
     };
     match metadata {
         Ok(ref metadata) => {
@@ -66,7 +67,7 @@ fn calculate_size<SizeReader>(
             } else {
                 let file_size = (config.size_reader)(metadata);
                 if metadata.is_dir() {
-                    let size: OutputSize = dir
+                    let size: OutputSize = dir_entry.path()
                         .read_dir()
                         .unwrap()
                         .collect::<Vec<_>>()
@@ -74,7 +75,7 @@ fn calculate_size<SizeReader>(
                         .map(|e: &[io::Result<DirEntry>]| {
                             e.into_iter().map(|e| {
                                 match &e {
-                                    Ok(p) => calculate_size(config, depth + 1, &p.path(), terminating_char, record.clone()),
+                                    Ok(p) => calculate_size(config, depth + 1, &p, terminating_char, record.clone()),
                                     _ => unimplemented!()
                                 }
                                 
@@ -85,7 +86,7 @@ fn calculate_size<SizeReader>(
                         print!(
                             "{}\t{}{}",
                             config.convert_size(size),
-                            dir.to_str().unwrap(),
+                            dir_entry.path().to_str().unwrap(),
                             terminating_char
                         );
                     }
@@ -95,7 +96,7 @@ fn calculate_size<SizeReader>(
                         print!(
                             "{}\t{}{}",
                             config.convert_size(file_size as OutputSize),
-                            dir.to_str().unwrap(),
+                            dir_entry.path().to_str().unwrap(),
                             terminating_char
                         );
                     }
@@ -104,7 +105,7 @@ fn calculate_size<SizeReader>(
             }
         },
         Err(e) => {
-            println!("{:?} at {}", e, dir.to_str().unwrap());
+            println!("{:?} at {}", e, dir_entry.path().to_str().unwrap());
             0
         }
     }
@@ -305,8 +306,61 @@ fn main() {
         .map(|s| Path::new(s))
         .collect::<Vec<_>>()
         .into_par_iter()
-        .map(|p| {
-            calculate_size(&config, 0, p, terminating_char, &record)
+        .map(|dir| {
+            let metadata = if config.follow_symlink {
+                dir.metadata()
+            } else {
+                dir.symlink_metadata()
+            };
+            match metadata {
+                Ok(ref metadata) => {
+                if should_skip(&metadata, &record) {
+                    0
+                } else {
+                    let file_size = (config.size_reader)(metadata);
+                    if metadata.is_dir() {
+                        let size: OutputSize = dir
+                            .read_dir()
+                            .unwrap()
+                            .collect::<Vec<_>>()
+                            .par_chunks(8)
+                            .map(|e: &[io::Result<DirEntry>]| {
+                                e.into_iter().map(|e| {
+                                    match &e {
+                                        Ok(p) => calculate_size(&config, 1, &p, terminating_char, &record),
+                                        _ => unimplemented!()
+                                    }
+                                    
+                                }).sum::<OutputSize>()
+                            })
+                            .sum::<OutputSize>() + file_size;
+                        if 1 <= config.max_depth {
+                            print!(
+                                "{}\t{}{}",
+                                config.convert_size(size),
+                                dir.to_str().unwrap(),
+                                terminating_char
+                            );
+                        }
+                        size
+                    } else {
+                        if config.display_files && 1 <= config.max_depth {
+                            print!(
+                                "{}\t{}{}",
+                                config.convert_size(file_size as OutputSize),
+                                dir.to_str().unwrap(),
+                                terminating_char
+                            );
+                        }
+                        file_size
+                    }
+                }
+            },
+                Err(e) => {
+                    println!("{:?} at {}", e, dir.to_str().unwrap());
+                    0
+                }
+            }
         })
         .sum();
     if matches.is_present("grand_total") {
