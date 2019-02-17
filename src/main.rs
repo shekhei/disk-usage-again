@@ -12,10 +12,9 @@ extern crate num_cpus;
 use nom::is_digit;
 use nom::types::CompleteByteSlice;
 use rayon::prelude::*;
-use std::fs::DirEntry;
 use std::fs::Metadata;
+use std::fs::ReadDir;
 use std::io;
-use std::path::Path;
 use std::sync::Mutex;
 use std::collections::HashSet;
 
@@ -49,17 +48,23 @@ impl ShardedSet {
     }
 }
 
+#[cfg(not(all(feature = "fstatat", target_os = "macos")))]
+mod normal_wrappers;
+#[cfg(not(all(feature = "fstatat", target_os = "macos")))]
+use self::normal_wrappers::{DirEntry, Path};
+
+#[cfg(all(feature = "fstatat", target_os = "macos"))]
+mod osx_fstatat_wrappers;
+#[cfg(all(feature = "fstatat", target_os = "macos"))]
+use self::osx_fstatat_wrappers::{DirEntry, Path};
+
 fn calculate_size<SizeReader>(
     config: &Config<SizeReader>, depth: u64, dir_entry: &DirEntry, terminating_char: char, record: &ShardedSet
 ) -> OutputSize
     where 
         SizeReader: Fn(&Metadata) -> OutputSize + Sync + Send {
     // let dir = dir_entry.path();
-    let metadata = if config.follow_symlink {
-        dir_entry.path().metadata()
-    } else {
-        dir_entry.metadata()
-    };
+    let metadata = dir_entry.metadata(config.follow_symlink);
     match metadata {
         Ok(ref metadata) => {
             if should_skip(&metadata, &record) {
@@ -67,18 +72,11 @@ fn calculate_size<SizeReader>(
             } else {
                 let file_size = (config.size_reader)(metadata);
                 if metadata.is_dir() {
-                    let size: OutputSize = dir_entry.path()
-                        .read_dir()
-                        .unwrap()
-                        .collect::<Vec<_>>()
+                    let size: OutputSize = dir_entry.read_dir()
                         .par_chunks(8)
-                        .map(|e: &[io::Result<DirEntry>]| {
+                        .map(|e: &[DirEntry]| {
                             e.into_iter().map(|e| {
-                                match &e {
-                                    Ok(p) => calculate_size(config, depth + 1, &p, terminating_char, record.clone()),
-                                    _ => unimplemented!()
-                                }
-                                
+                                calculate_size(config, depth + 1, e, terminating_char, record.clone())
                             }).sum::<OutputSize>()
                         })
                         .sum::<OutputSize>() + file_size;
@@ -307,11 +305,7 @@ fn main() {
         .collect::<Vec<_>>()
         .into_par_iter()
         .map(|dir| {
-            let metadata = if config.follow_symlink {
-                dir.metadata()
-            } else {
-                dir.symlink_metadata()
-            };
+            let metadata = dir.metadata(config.follow_symlink);
             match metadata {
                 Ok(ref metadata) => {
                 if should_skip(&metadata, &record) {
@@ -321,16 +315,10 @@ fn main() {
                     if metadata.is_dir() {
                         let size: OutputSize = dir
                             .read_dir()
-                            .unwrap()
-                            .collect::<Vec<_>>()
                             .par_chunks(8)
-                            .map(|e: &[io::Result<DirEntry>]| {
+                            .map(|e: &[DirEntry]| {
                                 e.into_iter().map(|e| {
-                                    match &e {
-                                        Ok(p) => calculate_size(&config, 1, &p, terminating_char, &record),
-                                        _ => unimplemented!()
-                                    }
-                                    
+                                    calculate_size(&config, 1, e, terminating_char, &record)
                                 }).sum::<OutputSize>()
                             })
                             .sum::<OutputSize>() + file_size;
