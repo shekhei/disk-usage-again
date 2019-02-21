@@ -6,7 +6,7 @@ dua also happens to be “two” in bahasa I believe, making it disk usage 2 :P
 
 ## Current state
 
-Logger is a direct write to println, and not all functionalities are there yet, and currently it only supports unix systems, namely, OSX
+Logger is a direct write to println, and not all functionalities are there yet, and currently it does not support windows
 
 # Usage
 
