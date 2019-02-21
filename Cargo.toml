@@ -1,5 +1,5 @@
 [package]
-name = "disk-usage-again"
+name = "dua"
 version = "0.0.1"
 authors = ["Wong Shek Hei Felix <shekhei@gmail.com>"]
 edition = "2018"
