@@ -1,8 +1,23 @@
 [package]
-name = "dua"
-version = "0.0.1"
+name = "disk-usage-again"
+version = "0.0.3"
 authors = ["Wong Shek Hei Felix <shekhei@gmail.com>"]
 edition = "2018"
+
+[[bin]]
+name = "dua"
+test = false
+bench = false
+doctest = false
+path = "src/main.rs"
+
+[lib]
+test = false
+name = "dualib"
+path = "src/lib.rs"
+
+[[test]]
+name = "tests"
 
 [dependencies]
 rayon = "1.0.3"
