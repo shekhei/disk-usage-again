@@ -1,0 +1,14 @@
+language: rust
+rust:
+- nightly
+matrix:
+  fast_finish: true
+cache: cargo
+deploy:
+  provider: releases
+  api_key:
+    secure: z2QxlItkqe7GJHjIrz6/3eYU1856ct6Rfd9zFDQ80Dl7XhT+7dsjPCL96OLHiF2HsTBdhdkvWj+oYNSTs8swqspkeexhMEhtKvLZdVpsKE0PjVRmOgCUhKy77HZHPYgioAAILv3Gf29zEClqHAuzBpiKkXPkR1MKDKTmDIGZB382clm8y083PwJ+gBR6CgTfM59s3o3oDzJL5WStsXkI/dfK/2D9bnlhxmqaUxgKS2UQZAT2kJoYPJYpQr5roEPWpIklbrdTvkOy0lYZ3kJ6j39l9k7jg62xsUuagfFadTDVeJlOsl3JsoGUOlcKAI5LVcKyGU6GdBrbobwQ1KsC3n1UO1JwcPqqchNdZyD0r1bTXTI1X1V+Js0vPTETgOtx8mks711ONDqa3isKUnb+6ClrdFNWKLJscO22+6W/Q/1qB+XPlzvvTmNFbpgxdsCo1nYdN7+Oj3+e46pEC8/UZuUWE37vFlOH4jw3sYqfzBXRRpcP/J11yiT1Rv1NhhgpqvsoMVkegRXDI6irNqn5a01f0ZzYIsQcfwg7JmjRITw5obrOvGuAep0melUFk3HKP0vxRJq63MF0hk3a2Zt2h7LVwVWKXNWCtt+/4V3xrZL9icmoIajj2m5XaoPtLgKats9gG7ffIBEHIn4pgzWolkiKMPg02PPzi7Sm/iVkmaw=
+  file: target/release/dua
+  on:
+    repo: shekhei/disk-usage-again
+    tags: true
