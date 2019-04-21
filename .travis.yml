@@ -4,6 +4,10 @@ rust:
 matrix:
   fast_finish: true
 cache: cargo
+scripts:
+  - cargo build --verbose
+  - cargo test --verbose
+  - cargo build --release
 deploy:
   provider: releases
   api_key:
