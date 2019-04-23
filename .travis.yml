@@ -15,3 +15,4 @@ deploy:
   file: target/release/dua
   on:
     repo: shekhei/disk-usage-again
+    all_branches: true
