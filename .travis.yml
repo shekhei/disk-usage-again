@@ -15,4 +15,3 @@ deploy:
   file: target/release/dua
   on:
     repo: shekhei/disk-usage-again
-    tags: false
