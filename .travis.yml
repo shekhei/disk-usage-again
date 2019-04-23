@@ -4,7 +4,7 @@ rust:
 matrix:
   fast_finish: true
 cache: cargo
-scripts:
+script:
   - cargo build --verbose
   - cargo test --verbose
   - cargo build --release
@@ -15,4 +15,4 @@ deploy:
   file: target/release/dua
   on:
     repo: shekhei/disk-usage-again
-    tags: true
+    tags: false
