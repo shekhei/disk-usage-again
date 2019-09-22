@@ -9,7 +9,6 @@ matrix:
 os:
 - linux
 - osx
-- windows
 script: cargo build --verbose --release; cargo test --verbose
 before_deploy:
  - "if [[ -f target/release/dua ]]; then mv target/release/dua \"target/release/dua-$TRAVIS_TAG-$TRAVIS_OS_NAME\"; fi"
