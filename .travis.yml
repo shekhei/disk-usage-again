@@ -8,7 +8,7 @@ os:
 - osx
 script: cargo build --verbose --release; cargo test --verbose
 before_deploy:
- - "ls -al target/release/; if [[ -f target/release/dua ]]; then mv target/release/dua \"target/release/dua-$TRAVIS_TAG-$TRAVIS_OS_NAME\"; fi"
+ - "if [[ -f target/release/dua ]]; then mv target/release/dua \"target/release/dua-$TRAVIS_TAG-$TRAVIS_OS_NAME\"; fi; ls -al target/release/;"
 deploy:
   provider: releases
   draft: true
