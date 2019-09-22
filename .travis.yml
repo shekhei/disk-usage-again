@@ -3,12 +3,17 @@ rust:
 - nightly
 matrix:
   fast_finish: true
+cache:
+  directories:
+    - /home/travis/.cargo
 os:
 - linux
 - osx
 script: cargo build --verbose --release; cargo test --verbose
 before_deploy:
  - "if [[ -f target/release/dua ]]; then mv target/release/dua \"target/release/dua-$TRAVIS_TAG-$TRAVIS_OS_NAME\"; fi; ls -al target/release/;"
+before_cache:
+ - rm -rf /home/travis/.cargo/registry
 deploy:
   provider: releases
   draft: true
