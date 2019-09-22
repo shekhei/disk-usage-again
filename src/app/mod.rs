@@ -62,7 +62,7 @@ pub fn app<W, E>(args: &Vec<&str>, mut output: W, mut error: E) -> Result<(), i3
         config.display_files = true
     }
     if matches.is_present("depth") && matches.is_present("summarize") {
-        writeln!(&mut error, "depth and summarize cannot be used together");
+        writeln!(&mut error, "depth and summarize cannot be used together").unwrap();
         return Err(1);
     } else if matches.is_present("depth") {
         config.max_depth = matches.value_of("depth").unwrap().parse().unwrap();
@@ -77,7 +77,7 @@ pub fn app<W, E>(args: &Vec<&str>, mut output: W, mut error: E) -> Result<(), i3
         .collect::<Vec<_>>();
     let total_size: common::OutputSize = common::execute(&paths, &config, terminating_char, &record);
     if matches.is_present("grand_total") {
-        writeln!(&mut output, "{}\ttotal", config.convert_size(total_size));
+        writeln!(&mut output, "{}\ttotal", config.convert_size(total_size)).unwrap();
     }
     return Ok(());
 }
