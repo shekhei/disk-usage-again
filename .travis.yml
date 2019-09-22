@@ -1,21 +1,23 @@
 language: rust
 rust:
 - stable
-- beta
 - nightly
 matrix:
   allow_failures:
   - rust: stable
-  - rust: beta
   fast_finish: true
 os:
 - linux
 - osx
+- windows
+script: cargo build --verbose --release; cargo test --verbose
+before_deploy:
+ - "if [[ -f target/release/dua ]]; then mv target/release/dua \"target/release/dua-$TRAVIS_TAG-$TRAVIS_OS_NAME\"; fi"
 deploy:
   provider: releases
   api_key:
     secure: Vb7+dZZWM9qYLi5pdqsaEY7aDIm+yIgzxjIdUVFIy+Pn784wZjBwL5vFuM53fbC8e+Ew1S9icgKXJmrFOoYY2E5hCzZL4NFnMcV7XWKtSBlGUO97mdGbvyO6CLCw8lXP7UOhckUEH67C/bQl8wZsv6AGs5m8/Tpfji6Q6fvPyL1hqPHTwUFUpbsEA7l2lv5mF0+tKTI6HTvgxzNlKGvQd7YOdgykLRo4f+PQ7/uDMyMNxCB8/2uWgcGh0f8eFvt8j8mlFvwSkCDfPR0R0EDvdUtIynEVeGjFGqk8z491BXrwb0OBZZaRO8jzpVJGV+McKqiQtSv5BQmQMJuhV+2x95B1WY+4HGmoRCcdcFj8KAX+U+lk8yugk0FVPJI/iSME/UYRpTXwFk9u5XYhBKcKlvAa1WBiFs0tWk4NfQyVkJPGHeHy+i+C7Jos+uNSte52cp2DHSvKTg/1BIs7COldEkiEJVMLliX1A+iVFDyRvjDmel9Hl6P+RPzdmoLYGQL70e34b7BoKgCFKjLyBe6C1VmcSLNJAf+EhYfLQIhu8g0ZRZp5PLviLbBwEZA0n852KR7KxEqtopGcpccDnA41HMrcB5v4oMObViJYXyCtUmNIh9M4siwv6EebbxRDsAZNipRxXqYiD/yyUOzN0N/zzGpc+XC5qmwq411PAeAnV78=
-  file: target/release/dua
+  file: target/release/dua-*
   draft: true
   on:
     condition: "$TRAVIS_RUST_VERSION = nightly" # currently only nightly builds
