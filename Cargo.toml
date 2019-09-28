@@ -1,6 +1,6 @@
 [package]
 name = "disk-usage-again"
-version = "0.0.4"
+version = "0.0.6"
 authors = ["Wong Shek Hei Felix <shekhei@gmail.com>"]
 edition = "2018"
 
@@ -27,4 +27,4 @@ nom = "^4.1"
 num_cpus = "1.9.0"
 
 [profile.release]
-debug = true
+lto = true
