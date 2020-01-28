@@ -5,13 +5,17 @@ use std::fs::Metadata;
 use std::io;
 use std::path::Path;
 use std::sync::Mutex;
+use rust_decimal::Decimal;
+use rust_decimal::prelude::FromPrimitive;
+use rust_decimal::prelude::Zero;
+use rust_decimal::prelude::One;
 
 use nom::is_digit;
 use nom::types::CompleteByteSlice;
 
 extern crate rayon;
 
-pub type OutputSize = u128;
+pub type OutputSize = Decimal;
 
 pub struct ShardedSet {
     _internal: [Mutex<HashSet<u64>>; 8],
@@ -60,7 +64,7 @@ where
     match metadata {
         Ok(ref metadata) => {
             if should_skip(&metadata, &record) {
-                0
+                Decimal::new(0, 0)
             } else {
                 let file_size = (config.size_reader)(metadata);
                 if metadata.is_dir() {
@@ -109,7 +113,7 @@ where
         }
         Err(e) => {
             println!("{:?} at {}", e, dir.to_str().unwrap());
-            0
+            Decimal::new(0, 0)
         }
     }
 }
@@ -125,17 +129,48 @@ where
     pub follow_symlink: bool,
     pub block_size: OutputSize,
     pub size_reader: SizeReader,
+    pub human_readable: bool,
+}
+
+const SIZE_CHARS: [char; 9] = [std::char::MAX, 'K', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y'];
+
+fn byte_size() -> Decimal {
+    Decimal::from_parts(1024, 0, 0, false, 0)
 }
 
 impl<SizeReader> Config<SizeReader>
 where
     SizeReader: Fn(&Metadata) -> OutputSize + Sync + Send,
 {
+    pub fn convert_human_readable(&self, size: OutputSize) -> String {
+        let mut output = size; // human readable are always in 1024 blocks
+        let mut iterations = 0;
+        while output >= byte_size() && SIZE_CHARS.len() >= iterations {
+            iterations += 1;
+            output /= byte_size();
+        }
+        let str_part = if output.fract().is_zero() {
+            format!("{:.0}", output)
+        } else {
+            format!("{:.1}", output.round_dp(1))
+        };
+        if SIZE_CHARS[iterations] == std::char::MAX {
+            format!("{}", str_part)
+        } else {
+            format!("{}{}", str_part, SIZE_CHARS[iterations])
+        }
+    }
+
     pub fn convert_size(&self, size: OutputSize) -> String {
+        if self.human_readable {
+            // convert with human readable
+            return self.convert_human_readable(size)
+        }
         let mut k = size / self.block_size;
-        k += match size % self.block_size {
-            0 => 0,
-            _ => 1,
+        k += if (size % self.block_size).is_zero() {
+            Decimal::zero()
+        } else {
+            Decimal::one()
         };
         // k += if size - k * block_size > 0 { 1 } else { 0 };
         k.to_string()
@@ -155,13 +190,13 @@ pub struct BlockSize(u64, usize, usize); // block_size_multiplier, block_size_po
 
 pub fn block_size_builder(block_size: BlockSize) -> OutputSize {
     let BlockSize(multiplier, power, block_size) = block_size;
-    let multiplier: OutputSize = multiplier as OutputSize;
-    let block_size = block_size as OutputSize;
-    block_size
-        .checked_pow(power as u32)
-        .unwrap()
-        .checked_mul(multiplier)
-        .unwrap()
+    let multiplier: OutputSize = Decimal::from_u64(multiplier).unwrap();
+    let mut block_size = Decimal::from_u32(block_size as u32).unwrap();
+    // no checked_pow for decimal, argh...
+    for _ in 0..power {
+        block_size *= block_size
+    }
+    block_size * multiplier
 }
 
 named!(block_size_parser<CompleteByteSlice, (Option<CompleteByteSlice>, Option<char>, Option<char>)>,
@@ -228,13 +263,13 @@ fn should_skip(metadata: &Metadata, record: &ShardedSet) -> bool {
 #[cfg(target_os = "macos")]
 pub fn size_block_reader(metadata: &Metadata) -> OutputSize {
     use std::os::unix::fs::MetadataExt;
-    metadata.blocks() as OutputSize * 512
+    Decimal::from_u64(metadata.blocks()).unwrap() * Decimal::new(512, 0)
 }
 
 #[cfg(target_os = "macos")]
 pub fn apparent_size_reader(metadata: &Metadata) -> OutputSize {
     use std::os::unix::fs::MetadataExt;
-    metadata.size() as OutputSize
+    Decimal::from_u64(metadata.size()).unwrap()
 }
 
 #[cfg(target_os = "linux")]

@@ -6,5 +6,6 @@ extern crate clap;
 extern crate num_cpus;
 #[macro_use]
 extern crate nom;
+extern crate rust_decimal;
 
 pub mod app;

@@ -2,6 +2,7 @@ use std::path::Path;
 
 use clap::{Arg, ArgMatches};
 use std::io::Write;
+use rust_decimal::Decimal;
 mod common;
 
 pub fn app<W, E>(args: &Vec<&str>, mut output: W, mut error: E) -> Result<(), i32>
@@ -14,6 +15,7 @@ pub fn app<W, E>(args: &Vec<&str>, mut output: W, mut error: E) -> Result<(), i3
         (@arg all: -a --all "display an entry for each file in the file hierachy")
         (@arg summarize: -s --summarize "display only a total for each argument")
         (@arg block_size: -B --("block-size") +takes_value value_name[SIZE] "use SIZE-byte blocks")
+        (@arg human_readable_size: -h --("human-readable") "print sizes in human readable format (e.g., 1K 234M 2G)")
         (@arg apparent_size: --("apparent-size") "print apparent sizes,  rather  than  disk	 usage;	 although  the
 	      apparent	size is	usually	smaller, it may	be larger due to holes
 	      in (`sparse') files, internal  fragmentation,  indirect  blocks,
@@ -42,12 +44,13 @@ pub fn app<W, E>(args: &Vec<&str>, mut output: W, mut error: E) -> Result<(), i3
                 matches.value_of("block_size").unwrap().as_bytes(),
             ))
         } else if matches.is_present("g") {
-            1073741824
+            Decimal::new(1073741824, 0)
         } else if matches.is_present("m") {
-            1048576
+            Decimal::new(1048576, 0)
         } else {
-            1024
+            Decimal::new(1024, 0)
         },
+        human_readable: matches.is_present("human_readable_size"),
         size_reader: if matches.is_present("apparent_size") {
             common::apparent_size_reader
         } else {
