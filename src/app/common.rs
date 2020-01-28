@@ -275,13 +275,13 @@ pub fn apparent_size_reader(metadata: &Metadata) -> OutputSize {
 #[cfg(target_os = "linux")]
 pub fn size_block_reader(metadata: &Metadata) -> OutputSize {
     use std::os::linux::fs::MetadataExt;
-    metadata.st_blocks() as OutputSize * 512
+    Decimal::from_u64(metadata.st_blocks()).unwrap() * Decimal::new(512, 0)
 }
 
 #[cfg(target_os = "linux")]
 pub fn apparent_size_reader(metadata: &Metadata) -> OutputSize {
     use std::os::linux::fs::MetadataExt;
-    metadata.st_size() as OutputSize
+    Decimal::from_u64(metadata.st_size()).unwrap()
 }
 
 pub fn execute<SizeReader>(

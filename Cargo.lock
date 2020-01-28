@@ -105,7 +105,7 @@ dependencies = [
 
 [[package]]
 name = "disk-usage-again"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "clap 2.33.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
