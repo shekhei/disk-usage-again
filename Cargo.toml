@@ -1,6 +1,6 @@
 [package]
 name = "disk-usage-again"
-version = "0.0.6"
+version = "0.0.7"
 authors = ["Wong Shek Hei Felix <shekhei@gmail.com>"]
 edition = "2018"
 
